@@ -1,4 +1,4 @@
-module kv_project
+module bitcask-go
 
 go 1.23.1
 

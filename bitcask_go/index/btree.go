@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/btree"
 
-	"kv_project/bitcask-go/data"
+	"bitcask-go/data"
 )
 
 // BTree 索引，主要封装了Google的Btree库
