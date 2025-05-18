@@ -7,7 +7,7 @@ const (
 	LogRecordDeleted                      // 已被删除
 )
 
-// 写入文件的记录（因为数据文件的数据是追加写入，类似日志格式，所以叫日志）
+// 文件中的记录（因为数据文件的数据是追加写入，类似日志格式，所以叫日志）
 type LogRecord struct {
 	Key   []byte
 	Value []byte

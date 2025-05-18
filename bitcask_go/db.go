@@ -1,6 +1,12 @@
 package bitcask_go
 
 import (
+	"errors"
+	"io"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	"bitcask-go/data"
@@ -9,11 +15,161 @@ import (
 
 // 存储引擎实例
 type DB struct {
-	options    Options                   //  配置项
+	options    Options                   // 配置项
 	mu         *sync.RWMutex             // 读写锁
+	fileIds    []int                     // 文件id，只能在加载索引时使用，不能在其他地方更新和使用
 	activeFile *data.DataFile            // 当前活跃的数据文件，可以用于写入
 	olderFiles map[uint32]*data.DataFile // 旧的数据文件，可以用于读取
 	index      index.Indexer             // 内存索引
+}
+
+// 打开存储引擎实例
+func Open(options Options) (*DB, error) {
+	// 对用户传入的配置项进行校验
+	if err := checkOptions(options); err != nil {
+		return nil, err
+	}
+
+	// 判读数据文件目录是否存在，如果不存在则创建
+	if _, err := os.Stat(options.DirPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(options.DirPath, os.ModePerm); err != nil {
+			return nil, err
+		}
+	}
+
+	// 初始化DB
+	db := &DB{
+		options:    options,
+		mu:         new(sync.RWMutex),
+		olderFiles: make(map[uint32]*data.DataFile),
+		index:      index.NewIndexer(options.IndexType),
+	}
+
+	// 加载数据文件
+	if err := db.loadDataFiles(); err != nil {
+		return nil, err
+	}
+
+	// 从数据文件中加载索引
+	if err := db.loadIndexFromDataFiles(); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+// 检查配置项（用户自定义参数）
+func checkOptions(options Options) error {
+	if options.DirPath == "" {
+		return errors.New("database dir path is empty")
+	}
+	if options.DataFileSize <= 0 {
+		return errors.New("database data file size is invalid")
+	}
+	return nil
+}
+
+// 从磁盘加载数据文件
+func (db *DB) loadDataFiles() error {
+	// 取出文件目中所有的文件
+	dirEntries, err := os.ReadDir(db.options.DirPath)
+	if err != nil {
+		return err
+	}
+
+	// 文件id集合
+	var fileIds []int
+
+	// 遍历目录中所有文件，找到所有以.data结尾的文件
+	for _, entry := range dirEntries {
+		if strings.HasSuffix(entry.Name(), data.DataFileNameSuffix) {
+			// 如果是以.data结尾的文件，获取文件id
+			splitNames := strings.Split(entry.Name(), ".")
+			fileId, err := strconv.Atoi(splitNames[0])
+			if err != nil {
+				// 数据目录可能损坏
+				return ErrDataDirectoryCorrupted
+			}
+			// 将文件id加入集合
+			fileIds = append(fileIds, fileId)
+		}
+	}
+
+	// 对文件id排序，从小到大一次加载
+	sort.Ints(fileIds)
+	db.fileIds = fileIds
+
+	// 遍历每个文件id，打开对应的数据文件
+	for i, fid := range fileIds {
+		// 打开数据文件
+		dataFile, err := data.OpenDataFile(db.options.DirPath, uint32(fid))
+		if err != nil {
+			return err
+		}
+
+		if i == len(fileIds)-1 {
+			// 如果是最后一个文件，id是最大的，是当前活跃文件
+			db.activeFile = dataFile
+		} else {
+			db.olderFiles[uint32(fid)] = dataFile
+		}
+	}
+
+	return nil
+}
+
+// 从数据文件中加载索引
+func (db *DB) loadIndexFromDataFiles() error {
+	if len(db.fileIds) == 0 {
+		return nil
+	}
+
+	// 遍历所有的文件id，处理文件中的记录
+	for i, fid := range db.fileIds {
+		// 当前遍历到的文件id
+		var fileId = uint32(fid)
+
+		// 当前遍历到的文件
+		var dataFile *data.DataFile
+
+		if fileId == db.activeFile.FiledId {
+			dataFile = db.activeFile
+		} else {
+			dataFile = db.olderFiles[fileId]
+		}
+
+		// 读取文件中的记录
+		var offset int64 = 0
+		for {
+			// 根据偏移量读取当前文件
+			logRecord, size, err := dataFile.ReadLogRecord(offset)
+			if err != nil {
+				if err == io.EOF {
+					// 如果文件已读到末尾，跳出循环
+					break
+				}
+				return err
+			}
+
+			// 构造内存索引并保存
+			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset}
+			if logRecord.Type == data.LogRecordDeleted {
+				// 如果文件中的记录被标记为已删除，则删除内存中相应的记录
+				db.index.Delete(logRecord.Key)
+			} else {
+				// 如果文件中记录存在，则新增到内存中
+				db.index.Put(logRecord.Key, logRecordPos)
+			}
+
+			// 更新文件偏移量，下次循环从新位置开始读取
+			offset += size
+		}
+
+		// 如果当前是活跃文件，更新下次写入文件的位置
+		if i == len(db.fileIds)-1 {
+			db.activeFile.WriteOff = offset
+		}
+	}
+	return nil
 }
 
 // 将键值对写入文件
@@ -44,6 +200,7 @@ func (db *DB) Put(key []byte, value []byte) error {
 
 // 将日志记录结构体写入文件
 func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
+	// 开启锁
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -73,7 +230,6 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 		}
 	}
 
-	writeOff := db.activeFile.WriteOff
 	if err := db.activeFile.Write(encRecord); err != nil {
 		return nil, err
 	}
@@ -88,7 +244,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 	// 构造内存记录并返回
 	return &data.LogRecordPos{
 		Fid:    db.activeFile.FiledId,
-		Offset: writeOff,
+		Offset: db.activeFile.WriteOff,
 	}, nil
 }
 
@@ -142,7 +298,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 
 	// 去目标文件读取数据
-	logRecord, err := dataFile.ReadLogRecord(logRecordPos.Offset)
+	logRecord, _, err := dataFile.ReadLogRecord(logRecordPos.Offset)
 	if err != nil {
 		return nil, err
 	}

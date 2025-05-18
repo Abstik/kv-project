@@ -17,6 +17,7 @@ type BTree struct {
 	lock *sync.RWMutex
 }
 
+// 初始化BTree索引
 func NewBtree() *BTree {
 	return &BTree{
 		tree: btree.New(32),
