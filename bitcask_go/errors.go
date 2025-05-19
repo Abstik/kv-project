@@ -3,9 +3,9 @@ package bitcask_go
 import "errors"
 
 var (
-	ErrKeyIsEmpty             = errors.New("the key is Empty")
-	ErrIndexUpdateFailed      = errors.New("failed to update index")
-	ErrKeyNotFound            = errors.New("the key is not found")
-	ErrDataFileNotFound       = errors.New("data file is not found")
-	ErrDataDirectoryCorrupted = errors.New("data directory maybe corrupted")
+	ErrKeyIsEmpty             = errors.New("key为空")
+	ErrIndexUpdateFailed      = errors.New("更新索引失败")
+	ErrKeyNotFound            = errors.New("key未被找到")
+	ErrDataFileNotFound       = errors.New("数据文件未被找到")
+	ErrDataDirectoryCorrupted = errors.New("数据文件可能被损坏")
 )

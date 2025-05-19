@@ -17,13 +17,13 @@ import (
 type DB struct {
 	options    Options                   // 配置项
 	mu         *sync.RWMutex             // 读写锁
-	fileIds    []int                     // 文件id，只能在加载索引时使用，不能在其他地方更新和使用
+	fileIds    []int                     // 文件id集合，只能在加载索引时使用，不能在其他地方更新和使用
 	activeFile *data.DataFile            // 当前活跃的数据文件，可以用于写入
 	olderFiles map[uint32]*data.DataFile // 旧的数据文件，可以用于读取
 	index      index.Indexer             // 内存索引
 }
 
-// 打开存储引擎实例
+// 打开存储引擎实例（初始化）
 func Open(options Options) (*DB, error) {
 	// 对用户传入的配置项进行校验
 	if err := checkOptions(options); err != nil {
@@ -70,7 +70,7 @@ func checkOptions(options Options) error {
 
 // 从磁盘加载数据文件
 func (db *DB) loadDataFiles() error {
-	// 取出文件目中所有的文件
+	// 取出文件目录中所有的文件
 	dirEntries, err := os.ReadDir(db.options.DirPath)
 	if err != nil {
 		return err
@@ -82,8 +82,8 @@ func (db *DB) loadDataFiles() error {
 	// 遍历目录中所有文件，找到所有以.data结尾的文件
 	for _, entry := range dirEntries {
 		if strings.HasSuffix(entry.Name(), data.DataFileNameSuffix) {
-			// 如果是以.data结尾的文件，获取文件id
-			splitNames := strings.Split(entry.Name(), ".")
+			// 如果是以.data（自定义的扩展名）结尾的文件，获取文件id
+			splitNames := strings.Split(entry.Name(), data.DataFileNameSuffix)
 			fileId, err := strconv.Atoi(splitNames[0])
 			if err != nil {
 				// 数据目录可能损坏
@@ -94,11 +94,12 @@ func (db *DB) loadDataFiles() error {
 		}
 	}
 
-	// 对文件id排序，从小到大一次加载
+	// 对文件id排序，从小到大依次加载
+	// 文件id是递增的，写入也是追加写入，最大的文件id即为当前活跃文件
 	sort.Ints(fileIds)
 	db.fileIds = fileIds
 
-	// 遍历每个文件id，打开对应的数据文件
+	// 遍历每个文件id，打开对应的数据文件，存入DB的当前活跃文件和旧文件集合中
 	for i, fid := range fileIds {
 		// 打开数据文件
 		dataFile, err := data.OpenDataFile(db.options.DirPath, uint32(fid))
@@ -131,6 +132,7 @@ func (db *DB) loadIndexFromDataFiles() error {
 		// 当前遍历到的文件
 		var dataFile *data.DataFile
 
+		// 根据 当前遍历到的文件id 指定 当前遍历到的文件
 		if fileId == db.activeFile.FiledId {
 			dataFile = db.activeFile
 		} else {
@@ -140,7 +142,7 @@ func (db *DB) loadIndexFromDataFiles() error {
 		// 读取文件中的记录
 		var offset int64 = 0
 		for {
-			// 根据偏移量读取当前文件
+			// 根据偏移量读取当前文件的一条日志记录
 			logRecord, size, err := dataFile.ReadLogRecord(offset)
 			if err != nil {
 				if err == io.EOF {
@@ -150,10 +152,12 @@ func (db *DB) loadIndexFromDataFiles() error {
 				return err
 			}
 
-			// 构造内存索引并保存
+			// 构造内存索引并保存进内存
 			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset}
 			if logRecord.Type == data.LogRecordDeleted {
 				// 如果文件中的记录被标记为已删除，则删除内存中相应的记录
+				// 因为日志文件是追加写入的，所以对key的删除或修改操作，以文件最新记录为准
+				// 可能文件开头可能添加了key，文件后续又删除了key，所以遍历到删除操作时要去内存中删除之前添加的key
 				db.index.Delete(logRecord.Key)
 			} else {
 				// 如果文件中记录存在，则新增到内存中
@@ -308,4 +312,33 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return nil, ErrKeyNotFound
 	}
 	return logRecord.Value, nil
+}
+
+// 根据key删除对应的数据
+func (db *DB) Delete(key []byte) error {
+	// 判断key的有效性
+	if len(key) == 0 {
+		return ErrKeyIsEmpty
+	}
+
+	// 检查key是否存在
+	if pos := db.index.Get(key); pos == nil {
+		return nil
+	}
+
+	// 构造文件记录，标记为已删除
+	logRecord := &data.LogRecord{Key: key, Type: data.LogRecordDeleted}
+
+	// 写入到当前文件当中
+	_, err := db.appendLogRecord(logRecord)
+	if err != nil {
+		return nil
+	}
+
+	// 从内存索引中将对应的key删除
+	ok := db.index.Delete(key)
+	if !ok {
+		return ErrIndexUpdateFailed
+	}
+	return nil
 }
