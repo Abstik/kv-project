@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	ErrInvalidCRC = errors.New("invalid crc value, log record maybe corrupted")
+	ErrInvalidCRC = errors.New("invalid crc value, log record maybe corrupted") // crc值校验失败
 )
 
 // 文件后缀
@@ -24,7 +24,7 @@ type DataFile struct {
 	IOManager fio.IOManager // io读写管理
 }
 
-// 根据文件路径和文件id打开文件
+// 根据文件路径和文件id打开文件（返回DataFile文件结构体，可以对此文件进行管理）
 func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
 	fileName := filepath.Join(dirPath, fmt.Sprintf("%09d", fileId)+DataFileNameSuffix)
 
@@ -41,10 +41,8 @@ func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
 	}, nil
 }
 
-// 读取日志文件记录（返回日志记录、长度、错误）
+// 读取日志文件记录（返回日志记录、长度(用于更新文件偏移量)、错误）
 func (df *DataFile) ReadLogRecord(offset int64) (*LogRecord, int64, error) {
-	// todo如何确保读取到的是最新的记录
-
 	// 获取文件大小
 	fileSize, err := df.IOManager.Size()
 	if err != nil {
@@ -76,11 +74,9 @@ func (df *DataFile) ReadLogRecord(offset int64) (*LogRecord, int64, error) {
 	// 取出对应的key和value的长度
 	keySize, valueSize := int64(header.keySize), int64(header.valueSize)
 
-	// 日志记录总长度
-	var recordSize = headerSize + keySize + valueSize
-
-	// logRecord 函数、返回的日志记录
+	// logRecord为函数返回的日志记录
 	logRecord := &LogRecord{Type: header.recordType}
+
 	// 读取key和value
 	if keySize > 0 || valueSize > 0 {
 		kvBuf, err := df.readNBytes(keySize+valueSize, offset+headerSize)
@@ -97,12 +93,11 @@ func (df *DataFile) ReadLogRecord(offset int64) (*LogRecord, int64, error) {
 	if crc != header.crc {
 		return nil, 0, ErrInvalidCRC
 	}
-	return logRecord, recordSize, nil
-}
 
-// 持久化
-func (df *DataFile) Sync() error {
-	return df.IOManager.Sync()
+	// 日志记录总长度
+	var recordSize = headerSize + keySize + valueSize
+
+	return logRecord, recordSize, nil
 }
 
 // 写入数据
@@ -112,11 +107,17 @@ func (df *DataFile) Write(buf []byte) error {
 		return err
 	}
 
+	// 更新写入文件位置
 	df.WriteOff += int64(n)
 	return nil
 }
 
-// 从偏移量offset开始读取n个字节
+// 持久化
+func (df *DataFile) Sync() error {
+	return df.IOManager.Sync()
+}
+
+// 读取文件：从偏移量offset开始读取n个字节
 func (df *DataFile) readNBytes(n int64, offset int64) (b []byte, err error) {
 	b = make([]byte, n)
 	_, err = df.IOManager.Read(b, offset)

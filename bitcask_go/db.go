@@ -302,6 +302,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 
 	// 去目标文件读取数据
+	// 由于内存索引保存的一定是此key对应的最新日志文件的offset，所以读取到的一定是最新的记录
 	logRecord, _, err := dataFile.ReadLogRecord(logRecordPos.Offset)
 	if err != nil {
 		return nil, err
