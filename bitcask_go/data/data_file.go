@@ -123,3 +123,7 @@ func (df *DataFile) readNBytes(n int64, offset int64) (b []byte, err error) {
 	_, err = df.IOManager.Read(b, offset)
 	return
 }
+
+func (df *DataFile) Close() error {
+	return df.IOManager.Close()
+}

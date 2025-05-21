@@ -176,6 +176,40 @@ func (db *DB) loadIndexFromDataFiles() error {
 	return nil
 }
 
+// 关闭数据库
+func (db *DB) Close() error {
+	if db.activeFile == nil {
+		return nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// 关闭当前活跃文件
+	if err := db.activeFile.Close(); err != nil {
+		return err
+	}
+
+	// 关闭旧的数据文件
+	for _, file := range db.olderFiles {
+		if err := file.Close(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (db *DB) Sync() error {
+	if db.activeFile == nil {
+		return nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return db.activeFile.Sync()
+}
+
 // 将键值对写入文件
 func (db *DB) Put(key []byte, value []byte) error {
 	if len(key) == 0 {
@@ -221,6 +255,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 
 	// 如果写入的数据超过活跃文件的阈值，则关闭活跃文件并打开新的文件
 	if db.activeFile.WriteOff+size > db.options.DataFileSize {
+		// 将当前活跃文件持久化
 		if err := db.activeFile.Sync(); err != nil {
 			return nil, err
 		}
@@ -270,6 +305,40 @@ func (db *DB) setActiveFile() error {
 	return nil
 }
 
+// 获取所有key的集合
+func (db *DB) ListKeys() [][]byte {
+	iterator := db.index.Iterator(false)
+	keys := make([][]byte, db.index.Size())
+	var idx int
+	for iterator.Rewind(); iterator.Valid(); iterator.Next() {
+		keys[idx] = iterator.Key()
+		// todo idx递增
+	}
+	return keys
+}
+
+// 获取所有key value，并执行用户指定的操作，fn函数为用户传递的参数，表示用户指定的key value操作
+func (db *DB) Fold(fn func(key []byte, value []byte) bool) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	iterator := db.index.Iterator(false)
+	for iterator.Rewind(); iterator.Valid(); iterator.Next() {
+		value, err := db.getValueByPosition(iterator.Value())
+		if err != nil {
+			return err
+		}
+
+		// 传入key value进行用户指定的操作
+		if !fn(iterator.Key(), value) {
+			// 如果出错，则跳出循环终止操作
+			break
+		}
+	}
+
+	return nil
+}
+
 // 根据key读取数据
 func (db *DB) Get(key []byte) ([]byte, error) {
 	// 读取时加读写锁
@@ -287,6 +356,12 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return nil, ErrKeyNotFound
 	}
 
+	// 从数据文件中获取value
+	return db.getValueByPosition(logRecordPos)
+}
+
+// 根据索引信息获取对应的value
+func (db *DB) getValueByPosition(logRecordPos *data.LogRecordPos) ([]byte, error) {
 	// 根据文件id找到对应的数据文件
 	var dataFile *data.DataFile // 要访问的目标数据文件
 	if db.activeFile.FiledId == logRecordPos.Fid {
