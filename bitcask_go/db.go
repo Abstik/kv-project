@@ -360,7 +360,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	return db.getValueByPosition(logRecordPos)
 }
 
-// 根据索引信息获取对应的value
+// 根据索引信息获取对应的value（使用此方法前加锁）
 func (db *DB) getValueByPosition(logRecordPos *data.LogRecordPos) ([]byte, error) {
 	// 根据文件id找到对应的数据文件
 	var dataFile *data.DataFile // 要访问的目标数据文件
