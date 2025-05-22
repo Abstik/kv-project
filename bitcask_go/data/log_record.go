@@ -8,8 +8,9 @@ import (
 type LogRecordType = byte
 
 const (
-	LogRecordNormal  LogRecordType = iota // 未被删除
-	LogRecordDeleted                      // 已被删除
+	LogRecordNormal      LogRecordType = iota // 未被删除
+	LogRecordDeleted                          // 已被删除
+	LogRecordTxnFinished                      // 已被提交（批量写之后，再向数据文件中写入一条新数据，Type为LogRecordTxnFinished，表示此次事务已提交）
 )
 
 // LogRecord的Header部分：crc(校验值) type(类型) keySize(key大小) valueSize(value大小)
@@ -37,6 +38,12 @@ type LogRecord struct {
 type LogRecordPos struct {
 	Fid    uint32 // 文件id，表示将数据存储到了哪个文件当中
 	Offset int64  // 偏移，表示将数据存储到了数据文件中的哪个位置
+}
+
+// 暂存的事务相关数据
+type TransactionRecord struct {
+	Record *LogRecord
+	Pos    *LogRecordPos
 }
 
 // 对LogRecord编码，返回字节数组及长度

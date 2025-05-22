@@ -21,6 +21,7 @@ type DB struct {
 	activeFile *data.DataFile            // 当前活跃的数据文件，可以用于写入
 	olderFiles map[uint32]*data.DataFile // 旧的数据文件，可以用于读取
 	index      index.Indexer             // 内存索引
+	seqNo      uint64                    // 事务序列号，全局递增（批量操作时为全局递增，无事务时为0）
 }
 
 // 打开存储引擎实例（初始化）
@@ -124,6 +125,28 @@ func (db *DB) loadIndexFromDataFiles() error {
 		return nil
 	}
 
+	// 定义更新内存索引的函数
+	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
+		var ok bool
+		if typ == data.LogRecordDeleted {
+			// 如果文件中的记录被标记为已删除，则删除内存中相应的记录
+			// 因为日志文件是追加写入的，所以对key的删除或修改操作，以文件最新记录为准
+			// 可能文件开头可能添加了key，文件后续又删除了key，所以遍历到删除操作时要去内存中删除之前添加的key
+			ok = db.index.Delete(key)
+		} else {
+			// 如果文件中记录存在，则新增到内存中
+			ok = db.index.Put(key, pos)
+		}
+		if !ok {
+			panic("failed to update index at startup")
+		}
+	}
+
+	// 暂存事务数据（日志中可能有多条记录是属于用一个事务的，当遍历到事务结束标识才能将这些记录统一更新进内存索引）
+	// map的key为事务id，value为事务中的所有提交记录
+	transactionRecords := make(map[uint64][]*data.TransactionRecord)
+	var currentSeqNo = nonTransactionSeqNo
+
 	// 遍历所有的文件id，处理文件中的记录
 	for i, fid := range db.fileIds {
 		// 当前遍历到的文件id
@@ -154,14 +177,34 @@ func (db *DB) loadIndexFromDataFiles() error {
 
 			// 构造内存索引并保存进内存
 			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset}
-			if logRecord.Type == data.LogRecordDeleted {
-				// 如果文件中的记录被标记为已删除，则删除内存中相应的记录
-				// 因为日志文件是追加写入的，所以对key的删除或修改操作，以文件最新记录为准
-				// 可能文件开头可能添加了key，文件后续又删除了key，所以遍历到删除操作时要去内存中删除之前添加的key
-				db.index.Delete(logRecord.Key)
-			} else {
-				// 如果文件中记录存在，则新增到内存中
-				db.index.Put(logRecord.Key, logRecordPos)
+
+			// 解析key，拿到事务序列号
+			realKey, seqNo := parseLogRecordKey(logRecord.Key)
+			if seqNo == nonTransactionSeqNo { // 如果不是事务提交的记录，则直接更新内存
+				updateIndex(realKey, logRecord.Type, logRecordPos)
+			} else { // 如果是事务提交的记录
+				// 遍历到文件中标识事务完成的记录，则可以更新到内存索引中
+				if logRecord.Type == data.LogRecordTxnFinished {
+					// 遍历事务暂存集合的所有记录，逐个更新到内存中
+					for _, txnRecord := range transactionRecords[seqNo] {
+						updateIndex(txnRecord.Record.Key, txnRecord.Record.Type, logRecordPos)
+					}
+
+					// 清空事务暂存集合
+					delete(transactionRecords, seqNo)
+				} else {
+					// 如果没有遍历到事务完成的记录，则将当前事务记录暂存
+					logRecord.Key = realKey
+					transactionRecords[seqNo] = append(transactionRecords[seqNo], &data.TransactionRecord{
+						Record: logRecord,
+						Pos:    logRecordPos,
+					})
+				}
+			}
+
+			// 更新事务序列号
+			if seqNo > currentSeqNo {
+				currentSeqNo = seqNo
 			}
 
 			// 更新文件偏移量，下次循环从新位置开始读取
@@ -173,6 +216,9 @@ func (db *DB) loadIndexFromDataFiles() error {
 			db.activeFile.WriteOff = offset
 		}
 	}
+
+	// 更新事务序列号
+	db.seqNo = currentSeqNo
 	return nil
 }
 
@@ -218,13 +264,13 @@ func (db *DB) Put(key []byte, value []byte) error {
 
 	// 构造日志记录结构体（向文件中写入的是一条日志记录）
 	logRecord := data.LogRecord{
-		Key:   key,
+		Key:   logRecordKeyWithSeq(key, nonTransactionSeqNo), // 将实际key和非事务序列号一起编码，作为新的key
 		Value: value,
 		Type:  data.LogRecordNormal,
 	}
 
 	// 将日志记录写入文件
-	pos, err := db.appendLogRecord(&logRecord)
+	pos, err := db.appendLogRecordWithLock(&logRecord)
 	if err != nil {
 		return err
 	}
@@ -236,12 +282,16 @@ func (db *DB) Put(key []byte, value []byte) error {
 	return nil
 }
 
-// 将日志记录结构体写入文件
-func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
+// 将日志记录写入文件（加锁版）
+func (db *DB) appendLogRecordWithLock(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
 	// 开启锁
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	return db.appendLogRecord(logRecord)
+}
 
+// 将日志记录结构体写入文件（不加锁版）
+func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
 	// 判断当前活跃文件是否存在，因为数据库没有写入时没有文件生成
 	if db.activeFile == nil {
 		// 如果为空则初始化数据文件
@@ -403,10 +453,13 @@ func (db *DB) Delete(key []byte) error {
 	}
 
 	// 构造文件记录，标记为已删除
-	logRecord := &data.LogRecord{Key: key, Type: data.LogRecordDeleted}
+	logRecord := &data.LogRecord{
+		Key:  logRecordKeyWithSeq(key, nonTransactionSeqNo),
+		Type: data.LogRecordDeleted,
+	}
 
 	// 写入到当前文件当中
-	_, err := db.appendLogRecord(logRecord)
+	_, err := db.appendLogRecordWithLock(logRecord)
 	if err != nil {
 		return nil
 	}

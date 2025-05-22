@@ -8,4 +8,5 @@ var (
 	ErrKeyNotFound            = errors.New("key未被找到")
 	ErrDataFileNotFound       = errors.New("数据文件未被找到")
 	ErrDataDirectoryCorrupted = errors.New("数据文件可能被损坏")
+	ErrExceedMaxBatchNum      = errors.New("超出最大批量写入数量")
 )
