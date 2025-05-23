@@ -46,7 +46,7 @@ type TransactionRecord struct {
 	Pos    *LogRecordPos
 }
 
-// 对LogRecord编码，返回字节数组及长度
+// 对LogRecord编码，构造出header，返回整个LogRecord字节数组及长度
 // LogRecord的Header部分：crc(校验值) type(类型) keySize(key大小) valueSize(value大小)
 // crc 4字节
 // type 1字节
@@ -118,4 +118,25 @@ func getLogRecordCRC(lr *LogRecord, header []byte) uint32 {
 	crc = crc32.Update(crc, crc32.IEEETable, lr.Value)
 
 	return crc
+}
+
+// 对文件位置信息LogRecordPos进行编码（用于写入hint文件）
+func EncodeLogRecordPos(pos *LogRecordPos) []byte {
+	buf := make([]byte, binary.MaxVarintLen32+binary.MaxVarintLen64)
+	var index = 0
+	index += binary.PutVarint(buf[index:], int64(pos.Fid))
+	index += binary.PutVarint(buf[index:], pos.Offset)
+	return buf[:index]
+}
+
+// 对文件位置信息LogRecordPos进行解码（用于从hint文件读取）
+func DecodeLogRecordPos(buf []byte) *LogRecordPos {
+	var index = 0
+	fileId, n := binary.Varint(buf[index:])
+	index += n
+	offset, _ := binary.Varint(buf[index:])
+	return &LogRecordPos{
+		Fid:    uint32(fileId),
+		Offset: offset,
+	}
 }

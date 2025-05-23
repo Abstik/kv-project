@@ -15,30 +15,55 @@ var (
 )
 
 // 文件后缀
-const DataFileNameSuffix = ".data"
+const (
+	DataFileNameSuffix    = ".data"          // 数据文件后缀
+	HintFileName          = "hint-index"     // hint文件后缀
+	MergeFinishedFileName = "merge-finished" // 标识merge完成文件的文件后缀
+
+)
 
 // 文件结构体
 type DataFile struct {
-	FiledId   uint32        // 文件id
+	FileId    uint32        // 文件id
 	WriteOff  int64         // 文件写入的位置（偏移量）
 	IOManager fio.IOManager // io读写管理
 }
 
 // 根据文件路径和文件id打开文件（返回DataFile文件结构体，可以对此文件进行管理）
 func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
-	fileName := filepath.Join(dirPath, fmt.Sprintf("%09d", fileId)+DataFileNameSuffix)
+	fileName := GetDataFileName(dirPath, fileId)
+	return newDataFile(fileName, fileId)
+}
 
-	// 初始化IOManager管理器接口
-	ioManager, err := fio.NewIOManager(fileName)
+// 获取数据文件名
+func GetDataFileName(dirPath string, fileId uint32) string {
+	return filepath.Join(dirPath, fmt.Sprintf("%09d", fileId)+DataFileNameSuffix)
+}
+
+// 初始化指定文件的IOManager
+func newDataFile(fileName string, field uint32) (*DataFile, error) {
+	ioManager, err := fio.NewFileIOManager(fileName)
 	if err != nil {
 		return nil, err
 	}
 
 	return &DataFile{
-		FiledId:   fileId,
+		FileId:    field,
 		WriteOff:  0,
 		IOManager: ioManager,
 	}, nil
+}
+
+// 打开hint索引文件
+func OpenHintFile(dirPath string) (*DataFile, error) {
+	fileName := filepath.Join(dirPath, HintFileName)
+	return newDataFile(fileName, 0)
+}
+
+// 打开标识merge完成的文件
+func OpenMergeFinishedFile(dirPath string) (*DataFile, error) {
+	fileName := filepath.Join(dirPath, MergeFinishedFileName)
+	return newDataFile(fileName, 0)
 }
 
 // 读取日志文件记录（返回日志记录、长度(用于更新文件偏移量)、错误）
@@ -110,6 +135,16 @@ func (df *DataFile) Write(buf []byte) error {
 	// 更新写入文件位置
 	df.WriteOff += int64(n)
 	return nil
+}
+
+// 向hint文件（相当于merge引擎中的内存）中写数据
+func (df *DataFile) WriteHintRecord(key []byte, pos *LogRecordPos) error {
+	record := &LogRecord{
+		Key:   key,
+		Value: EncodeLogRecordPos(pos),
+	}
+	encodeLogRecord, _ := EncodeLogRecord(record)
+	return df.Write(encodeLogRecord)
 }
 
 // 持久化

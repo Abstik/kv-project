@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ type DB struct {
 	olderFiles map[uint32]*data.DataFile // 旧的数据文件，可以用于读取
 	index      index.Indexer             // 内存索引
 	seqNo      uint64                    // 事务序列号，全局递增（批量操作时为全局递增，无事务时为0）
+	isMerging  bool                      // 是否正在merge（同一时刻只允许一个merge）
 }
 
 // 打开存储引擎实例（初始化）
@@ -44,6 +46,16 @@ func Open(options Options) (*DB, error) {
 		mu:         new(sync.RWMutex),
 		olderFiles: make(map[uint32]*data.DataFile),
 		index:      index.NewIndexer(options.IndexType),
+	}
+
+	// 加载merge数据目录
+	if err := db.loadMergeFiles(); err != nil {
+		return nil, err
+	}
+
+	// 从hint中加载索引
+	if err := db.loadIndexFromHintFile(); err != nil {
+		return nil, err
 	}
 
 	// 加载数据文件
@@ -125,6 +137,21 @@ func (db *DB) loadIndexFromDataFiles() error {
 		return nil
 	}
 
+	// 由于调用此方法前，已经从hint文件中加载过索引，所以只需要加载没有merge的文件，从其中加载索引
+	hasMerge, nonMergeFileId := false, uint32(0)
+
+	mergeFinFileName := filepath.Join(db.options.DirPath, data.MergeFinishedFileName)
+	// 判断标识merge完成的文件是否存在
+	if _, err := os.Stat(mergeFinFileName); err == nil {
+		// 获取未merge的文件id
+		fid, err := db.getNonMergeFileId(db.options.DirPath)
+		if err != nil {
+			return err
+		}
+		hasMerge = true
+		nonMergeFileId = fid
+	}
+
 	// 定义更新内存索引的函数
 	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
 		var ok bool
@@ -152,11 +179,16 @@ func (db *DB) loadIndexFromDataFiles() error {
 		// 当前遍历到的文件id
 		var fileId = uint32(fid)
 
+		// 如果之前发生过merge并且当前遍历到的文件id小于未merge的文件id，则当前文件已经从hint中加载过索引，可以直接跳过
+		if hasMerge && fileId < nonMergeFileId {
+			continue
+		}
+
 		// 当前遍历到的文件
 		var dataFile *data.DataFile
 
 		// 根据 当前遍历到的文件id 指定 当前遍历到的文件
-		if fileId == db.activeFile.FiledId {
+		if fileId == db.activeFile.FileId {
 			dataFile = db.activeFile
 		} else {
 			dataFile = db.olderFiles[fileId]
@@ -311,7 +343,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 		}
 
 		// 将当前活跃文件转换为旧的数据文件
-		db.olderFiles[db.activeFile.FiledId] = db.activeFile
+		db.olderFiles[db.activeFile.FileId] = db.activeFile
 
 		// 打开新的数据文件
 		if err := db.setActiveFile(); err != nil {
@@ -332,7 +364,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 
 	// 构造内存记录并返回
 	return &data.LogRecordPos{
-		Fid:    db.activeFile.FiledId,
+		Fid:    db.activeFile.FileId,
 		Offset: db.activeFile.WriteOff,
 	}, nil
 }
@@ -342,7 +374,7 @@ func (db *DB) setActiveFile() error {
 	var initialField uint32 = 0
 	if db.activeFile == nil {
 		// 如果当前活跃文件为空则初始化数据文件
-		initialField = db.activeFile.FiledId + 1
+		initialField = db.activeFile.FileId + 1
 	}
 
 	// 打开新的数据文件
@@ -414,7 +446,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 func (db *DB) getValueByPosition(logRecordPos *data.LogRecordPos) ([]byte, error) {
 	// 根据文件id找到对应的数据文件
 	var dataFile *data.DataFile // 要访问的目标数据文件
-	if db.activeFile.FiledId == logRecordPos.Fid {
+	if db.activeFile.FileId == logRecordPos.Fid {
 		dataFile = db.activeFile
 	} else {
 		dataFile = db.olderFiles[logRecordPos.Fid]
