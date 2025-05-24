@@ -17,9 +17,9 @@ var (
 // 文件后缀
 const (
 	DataFileNameSuffix    = ".data"          // 数据文件后缀
-	HintFileName          = "hint-index"     // hint文件后缀
-	MergeFinishedFileName = "merge-finished" // 标识merge完成文件的文件后缀
-
+	HintFileName          = "hint-index"     // hint文件名
+	MergeFinishedFileName = "merge-finished" // 标识merge完成文件的文件名
+	SeqNoFileName         = "seq-no"         // 标识最新事务序列号的文件名（B+树索引专属）
 )
 
 // 文件结构体
@@ -27,17 +27,6 @@ type DataFile struct {
 	FileId    uint32        // 文件id
 	WriteOff  int64         // 文件写入的位置（偏移量）
 	IOManager fio.IOManager // io读写管理
-}
-
-// 根据文件路径和文件id打开文件（返回DataFile文件结构体，可以对此文件进行管理）
-func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
-	fileName := GetDataFileName(dirPath, fileId)
-	return newDataFile(fileName, fileId)
-}
-
-// 获取数据文件名
-func GetDataFileName(dirPath string, fileId uint32) string {
-	return filepath.Join(dirPath, fmt.Sprintf("%09d", fileId)+DataFileNameSuffix)
 }
 
 // 初始化指定文件的IOManager
@@ -54,15 +43,32 @@ func newDataFile(fileName string, field uint32) (*DataFile, error) {
 	}, nil
 }
 
-// 打开hint索引文件
+// 根据文件路径和文件id打开文件（返回DataFile文件结构体，可以对此文件进行管理）
+func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
+	fileName := GetDataFileName(dirPath, fileId)
+	return newDataFile(fileName, fileId)
+}
+
+// 获取数据文件名
+func GetDataFileName(dirPath string, fileId uint32) string {
+	return filepath.Join(dirPath, fmt.Sprintf("%09d", fileId)+DataFileNameSuffix)
+}
+
+// 打开hint索引文件（不存在则新建）
 func OpenHintFile(dirPath string) (*DataFile, error) {
 	fileName := filepath.Join(dirPath, HintFileName)
 	return newDataFile(fileName, 0)
 }
 
-// 打开标识merge完成的文件
+// 打开标识merge完成的文件（不存在则新建）
 func OpenMergeFinishedFile(dirPath string) (*DataFile, error) {
 	fileName := filepath.Join(dirPath, MergeFinishedFileName)
+	return newDataFile(fileName, 0)
+}
+
+// 打开标识事务序列号的文件（不存在则新建）
+func OpenSeqNoFile(dirPath string) (*DataFile, error) {
+	fileName := filepath.Join(dirPath, SeqNoFileName)
 	return newDataFile(fileName, 0)
 }
 

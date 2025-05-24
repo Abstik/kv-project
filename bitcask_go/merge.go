@@ -112,9 +112,7 @@ func (db *DB) Merge() error {
 			// 将文件数据和内存索引比较
 			if logRecordPos != nil &&
 				logRecordPos.Fid == dataFile.FileId &&
-				logRecordPos.Offset == offset {
-				// 如果有效则重写
-
+				logRecordPos.Offset == offset { // 如果有效则重写
 				// 由于此记录一定有效，所以可以清除文件中数据的事务序列号标记
 				logRecord.Key = logRecordKeyWithSeq(realKey, nonTransactionSeqNo)
 				// 重写入merge引擎中的文件中
@@ -168,13 +166,13 @@ func (db *DB) Merge() error {
 // 原目录：tmp/bitcask
 // 对应的merge目录：tmp/bitcask-merge
 func (db *DB) getMergePath() string {
-	// 获取父目录
+	// 获取父目录 /tmp
 	dir := path.Dir(path.Clean(db.options.DirPath))
 
-	// 获取子目录名称
+	// 获取子目录名称 /bitcask
 	base := path.Base(db.options.DirPath)
 
-	// 组合merge文件路径
+	// 组合merge文件路径 tmp/bitcask-merge
 	return filepath.Join(dir, base+mergeDirName)
 }
 
@@ -198,10 +196,15 @@ func (db *DB) loadMergeFiles() error {
 	// 查找标识merge完成的文件
 	var mergeFinished bool      // 标识merge是否已完成
 	var mergeFileNames []string // merge过的文件的集合
+	// 遍历merge目录下的所有文件
 	for _, entry := range dirEntries {
 		if entry.Name() == data.MergeFinishedFileName {
 			// 如果merge已完成
 			mergeFinished = true
+		}
+		// 如果是记录最新事务序列号的文件，则跳过不需要移动
+		if entry.Name() == data.SeqNoFileName {
+			continue
 		}
 		mergeFileNames = append(mergeFileNames, entry.Name())
 	}
@@ -230,9 +233,9 @@ func (db *DB) loadMergeFiles() error {
 
 	// 将新的数据文件（merge目录下的文件）移动到数据目录（DB引擎的目录）中
 	for _, fileName := range mergeFileNames {
-		srcPath := filepath.Join(mergePath, fileName)
-		destPath := filepath.Join(db.options.DirPath, fileName)
-		if err := os.Rename(srcPath, destPath); err != nil {
+		oldPath := filepath.Join(mergePath, fileName)
+		newPath := filepath.Join(db.options.DirPath, fileName)
+		if err := os.Rename(oldPath, newPath); err != nil {
 			return err
 		}
 	}
