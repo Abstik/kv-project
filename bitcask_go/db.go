@@ -167,7 +167,7 @@ func (db *DB) loadDataFiles() error {
 	return nil
 }
 
-// 从数据文件中加载索引
+// 从数据文件中加载内存索引
 func (db *DB) loadIndexFromDataFiles() error {
 	if len(db.fileIds) == 0 {
 		return nil

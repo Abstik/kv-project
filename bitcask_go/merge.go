@@ -60,7 +60,7 @@ func (db *DB) Merge() error {
 	}
 	db.mu.Unlock()
 
-	//	将merge的文件从小到大进行排序，依次merge
+	// 将merge的文件从小到大进行排序，依次merge
 	sort.Slice(mergeFiles, func(i, j int) bool {
 		return mergeFiles[i].FileId < mergeFiles[j].FileId
 	})
@@ -107,13 +107,14 @@ func (db *DB) Merge() error {
 
 			// 解析拿到实际的key
 			realKey, _ := parseLogRecordKey(logRecord.Key)
+			// 根据实际key去内存寻找
 			logRecordPos := db.index.Get(realKey)
 
 			// 将文件数据和内存索引比较
 			if logRecordPos != nil &&
 				logRecordPos.Fid == dataFile.FileId &&
 				logRecordPos.Offset == offset { // 如果有效则重写
-				// 由于此记录一定有效，所以可以清除文件中数据的事务序列号标记
+				// 由于内存中的记录一定有效，所以此记录也有效，可以清除文件中数据的事务序列号标记
 				logRecord.Key = logRecordKeyWithSeq(realKey, nonTransactionSeqNo)
 				// 重写入merge引擎中的文件中
 				_, err := mergeDB.appendLogRecord(logRecord)

@@ -24,14 +24,14 @@ type logRecordHeader struct {
 	crc        uint32        // 校验值
 	recordType LogRecordType // 标识LogRecord的类型
 	keySize    uint32        // key的长度
-	valueSize  uint32        //  value的长度
+	valueSize  uint32        // value的长度
 }
 
 // 文件中的记录（因为数据文件的数据是追加写入，类似日志格式，所以叫日志）
 type LogRecord struct {
 	Key   []byte
 	Value []byte
-	Type  LogRecordType // 数据删除时的墓碑值
+	Type  LogRecordType // 数据类型
 }
 
 // 内存中的记录，表示key对应的value值
@@ -40,7 +40,7 @@ type LogRecordPos struct {
 	Offset int64  // 偏移，表示将数据存储到了数据文件中的哪个位置
 }
 
-// 暂存的事务相关数据
+// 暂存的事务相关数据（用于从数据文件加载内存索引）
 type TransactionRecord struct {
 	Record *LogRecord
 	Pos    *LogRecordPos

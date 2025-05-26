@@ -47,7 +47,7 @@ func NewIndexer(typ IndexType, dirPath string, sync bool) Indexer {
 	case ART:
 		return NewART()
 	case BPTree:
-		return NewBPlusTree(dirPath, sync) // todo
+		return NewBPlusTree(dirPath, sync) // todo 使B+树实现index接口
 	default:
 		panic("unsupported index type")
 	}
