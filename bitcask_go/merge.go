@@ -195,12 +195,12 @@ func (db *DB) loadMergeFiles() error {
 	}
 
 	// 查找标识merge完成的文件
-	var mergeFinished bool      // 标识merge是否已完成
+	var mergeFinished bool      // 标识merge是否完成过
 	var mergeFileNames []string // merge过的文件的集合
 	// 遍历merge目录下的所有文件
 	for _, entry := range dirEntries {
 		if entry.Name() == data.MergeFinishedFileName {
-			// 如果merge已完成
+			// 如果merge完成过
 			mergeFinished = true
 		}
 		// 如果是记录最新事务序列号的文件，则跳过不需要移动
@@ -236,6 +236,7 @@ func (db *DB) loadMergeFiles() error {
 	for _, fileName := range mergeFileNames {
 		oldPath := filepath.Join(mergePath, fileName)
 		newPath := filepath.Join(db.options.DirPath, fileName)
+		// 将文件从旧路径移动到新路径
 		if err := os.Rename(oldPath, newPath); err != nil {
 			return err
 		}

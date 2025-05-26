@@ -10,4 +10,5 @@ var (
 	ErrDataDirectoryCorrupted = errors.New("数据文件可能被损坏")
 	ErrExceedMaxBatchNum      = errors.New("超出最大批量写入数量")
 	ErrMergeIsProgress        = errors.New("正在进行merge")
+	ErrDatabaseIsUsing        = errors.New("数据库正在使用")
 )

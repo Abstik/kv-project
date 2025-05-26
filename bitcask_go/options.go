@@ -4,10 +4,26 @@ import "os"
 
 // 配置项结构体（封装需要用户自定义的参数）
 type Options struct {
-	DirPath      string    // 数据库数据文件目录
-	DataFileSize int64     // 数据文件的大小（阈值）
-	SyncWrites   bool      // 每次写数据是否持久化
-	IndexType    IndexType // 索引类型
+	// 数据库数据文件目录
+	DirPath string
+
+	// 数据文件的大小（阈值）
+	DataFileSize int64
+
+	// 每次写数据是否持久化
+	SyncWrites bool
+
+	// 自动持久化的阈值
+	BytesPerSync uint
+
+	// 索引类型
+	IndexType IndexType
+
+	// 启动时是否使用 MMap 加载数据
+	MMapAtStartup bool
+
+	// 数据文件合并的阈值
+	DataFileMergeRatio float32
 }
 
 // 索引迭代器配置项（供用户调用）
@@ -43,10 +59,12 @@ const (
 // 默认配置
 
 var DefaultOptions = Options{
-	DirPath:      os.TempDir(),
-	DataFileSize: 256 * 1024 * 1024, // 256MB
-	SyncWrites:   false,
-	IndexType:    Btree,
+	DirPath:       os.TempDir(),
+	DataFileSize:  256 * 1024 * 1024, // 256MB
+	SyncWrites:    false,
+	BytesPerSync:  0,
+	IndexType:     Btree,
+	MMapAtStartup: true,
 }
 
 var DefaultIteratorOptions = IteratorOptions{

@@ -29,9 +29,9 @@ type DataFile struct {
 	IOManager fio.IOManager // io读写管理
 }
 
-// 初始化指定文件的IOManager
-func newDataFile(fileName string, field uint32) (*DataFile, error) {
-	ioManager, err := fio.NewFileIOManager(fileName)
+// 初始化指定文件的IOManager（mmap加快文件启动速度，只有启动时打开数据文件用到mmap，其余用标准文件io）
+func newDataFile(fileName string, field uint32, ioType fio.FileIOType) (*DataFile, error) {
+	ioManager, err := fio.NewIOManager(fileName, ioType)
 	if err != nil {
 		return nil, err
 	}
@@ -44,9 +44,9 @@ func newDataFile(fileName string, field uint32) (*DataFile, error) {
 }
 
 // 根据文件路径和文件id打开文件（返回DataFile文件结构体，可以对此文件进行管理）
-func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
+func OpenDataFile(dirPath string, fileId uint32, ioType fio.FileIOType) (*DataFile, error) {
 	fileName := GetDataFileName(dirPath, fileId)
-	return newDataFile(fileName, fileId)
+	return newDataFile(fileName, fileId, ioType)
 }
 
 // 获取数据文件名
@@ -57,19 +57,19 @@ func GetDataFileName(dirPath string, fileId uint32) string {
 // 打开hint索引文件（不存在则新建）
 func OpenHintFile(dirPath string) (*DataFile, error) {
 	fileName := filepath.Join(dirPath, HintFileName)
-	return newDataFile(fileName, 0)
+	return newDataFile(fileName, 0, fio.StandardFIO)
 }
 
 // 打开标识merge完成的文件（不存在则新建）
 func OpenMergeFinishedFile(dirPath string) (*DataFile, error) {
 	fileName := filepath.Join(dirPath, MergeFinishedFileName)
-	return newDataFile(fileName, 0)
+	return newDataFile(fileName, 0, fio.StandardFIO)
 }
 
 // 打开标识事务序列号的文件（不存在则新建）
 func OpenSeqNoFile(dirPath string) (*DataFile, error) {
 	fileName := filepath.Join(dirPath, SeqNoFileName)
-	return newDataFile(fileName, 0)
+	return newDataFile(fileName, 0, fio.StandardFIO)
 }
 
 // 读取日志文件记录（返回日志记录、长度(用于更新文件偏移量)、错误）
@@ -167,4 +167,16 @@ func (df *DataFile) readNBytes(n int64, offset int64) (b []byte, err error) {
 
 func (df *DataFile) Close() error {
 	return df.IOManager.Close()
+}
+
+func (df *DataFile) SetIOManager(dirPath string, ioType fio.FileIOType) error {
+	if err := df.IOManager.Close(); err != nil {
+		return err
+	}
+	ioManager, err := fio.NewIOManager(GetDataFileName(dirPath, df.FileId), ioType)
+	if err != nil {
+		return err
+	}
+	df.IOManager = ioManager
+	return nil
 }
