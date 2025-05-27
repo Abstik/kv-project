@@ -22,7 +22,7 @@ type Options struct {
 	// 启动时是否使用 MMap 加载数据
 	MMapAtStartup bool
 
-	// 数据文件合并的阈值
+	// 数据文件merge合并的阈值（无效数据/总数据），超过此阈值才会merge
 	DataFileMergeRatio float32
 }
 
@@ -59,12 +59,13 @@ const (
 // 默认配置
 
 var DefaultOptions = Options{
-	DirPath:       os.TempDir(),
-	DataFileSize:  256 * 1024 * 1024, // 256MB
-	SyncWrites:    false,
-	BytesPerSync:  0,
-	IndexType:     Btree,
-	MMapAtStartup: true,
+	DirPath:            os.TempDir(),
+	DataFileSize:       256 * 1024 * 1024, // 256MB
+	SyncWrites:         false,
+	BytesPerSync:       0,
+	IndexType:          Btree,
+	MMapAtStartup:      true,
+	DataFileMergeRatio: 0.5,
 }
 
 var DefaultIteratorOptions = IteratorOptions{

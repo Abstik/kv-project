@@ -27,15 +27,18 @@ func NewBtree() *BTree {
 	}
 }
 
-func (bt *BTree) Put(key []byte, pos *data.LogRecordPos) bool {
+func (bt *BTree) Put(key []byte, pos *data.LogRecordPos) *data.LogRecordPos {
 	it := Item{key: key, pos: pos}
 	// 加锁
 	bt.lock.Lock()
-	// 将执行的Item类型插入到Btree中，如果已存在则替换
-	bt.tree.ReplaceOrInsert(&it)
+	// 将执行的Item类型插入到Btree中，如果已存在则返回旧值
+	oldItem := bt.tree.ReplaceOrInsert(&it)
 	// 解锁
 	bt.lock.Unlock()
-	return true
+	if oldItem == nil {
+		return nil
+	}
+	return oldItem.(*Item).pos
 }
 
 // 读操作不用加锁
@@ -49,15 +52,15 @@ func (bt *BTree) Get(key []byte) *data.LogRecordPos {
 	return btreeItem.(*Item).pos
 }
 
-func (bt *BTree) Delete(key []byte) bool {
+func (bt *BTree) Delete(key []byte) (*data.LogRecordPos, bool) {
 	it := &Item{key: key}
 	bt.lock.Lock()
 	oldItem := bt.tree.Delete(it)
 	bt.lock.Unlock()
 	if oldItem == nil {
-		return false
+		return nil, false
 	}
-	return true
+	return oldItem.(*Item).pos, true
 }
 
 func (bt *BTree) Size() int {
