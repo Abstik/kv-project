@@ -6,6 +6,7 @@ import (
 	"time"
 
 	bitcask "bitcask-go"
+	"bitcask-go/utils"
 )
 
 var (
@@ -19,7 +20,7 @@ const (
 	Hash
 	Set
 	List
-	Zet
+	ZSet
 )
 
 // Redis数据结构服务
@@ -310,6 +311,199 @@ func (rds *RedisDataStructure) SRem(key, member []byte) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// ==============List数据结构==============
+func (rds *RedisDataStructure) LPush(key, element []byte) (uint32, error) {
+	return rds.pushInner(key, element, true)
+}
+
+func (rds *RedisDataStructure) RPush(key, element []byte) (uint32, error) {
+	return rds.pushInner(key, element, false)
+}
+
+// 插入数据，返回key下数据的数量
+func (rds *RedisDataStructure) pushInner(key, element []byte, isLeft bool) (uint32, error) {
+	// 查找元数据
+	meta, err := rds.findMetadata(key, List)
+	if err != nil {
+		return 0, err
+	}
+
+	// 构造数据部分的key
+	lk := &listInternalKey{
+		key:     key,
+		version: meta.version,
+	}
+
+	if isLeft {
+		// 如果是从左边插入
+		lk.index = meta.head - 1
+	} else {
+		// 如果是从右边插入
+		lk.index = meta.tail
+	}
+
+	wb := rds.db.NewWriteBatch(bitcask.DefaultWriteBatchOptions)
+	meta.size++
+	if isLeft {
+		meta.head--
+	} else {
+		meta.tail++
+	}
+	// 更新元数据
+	_ = wb.Put(key, meta.encode())
+	// 更新数据部分
+	_ = wb.Put(lk.encode(), element)
+	if err = wb.Commit(); err != nil {
+		return 0, err
+	}
+
+	return meta.size, nil
+}
+
+func (rds *RedisDataStructure) LPop(key []byte) ([]byte, error) {
+	return rds.popInner(key, true)
+}
+
+func (rds *RedisDataStructure) RPop(key []byte) ([]byte, error) {
+	return rds.popInner(key, false)
+}
+
+// 删除数据，返回被删除的数据和错误
+func (rds *RedisDataStructure) popInner(key []byte, isLeft bool) ([]byte, error) {
+	// 查找元数据
+	meta, err := rds.findMetadata(key, List)
+	if err != nil {
+		return nil, err
+	}
+	if meta.size == 0 {
+		return nil, nil
+	}
+
+	// 构造数据部分的key
+	lk := &listInternalKey{
+		key:     key,
+		version: meta.version,
+	}
+
+	// 确认数据部分的key的index
+	if isLeft {
+		// 如果是从左边插入
+		lk.index = meta.head
+	} else {
+		// 如果是从右边插入
+		lk.index = meta.tail - 1
+	}
+
+	// 根据数据部分的key去查找
+	element, err := rds.db.Get(lk.encode())
+	if err != nil {
+		return nil, err
+	}
+
+	// 更新元数据
+	meta.size--
+	if isLeft {
+		meta.head++
+	} else {
+		meta.tail--
+	}
+	if err = rds.db.Put(key, meta.encode()); err != nil {
+		return nil, err
+	}
+	return element, nil
+}
+
+// ==============ZSet数据结构==============
+func (rds *RedisDataStructure) ZAdd(key []byte, score float64, member []byte) (bool, error) {
+	meta, err := rds.findMetadata(key, ZSet)
+	if err != nil {
+		return false, err
+	}
+
+	// 构造数据部分的key
+	zk := &zsetInternalKey{
+		key:     key,
+		version: meta.version,
+		member:  member,
+		score:   score,
+	}
+
+	// 此key下的这个member是否存在
+	var exist = true
+
+	// 先根据member key寻找score
+	oldScore, err := rds.db.Get(zk.encodeWithMember())
+	if err != nil && !errors.Is(err, bitcask.ErrKeyNotFound) {
+		return false, err
+	}
+	if errors.Is(err, bitcask.ErrKeyNotFound) {
+		exist = false
+	}
+
+	// 如果此key下的这个member存在
+	if exist {
+		// 如果score相同，表示相同key下的member和score都相同，数据重复，返回false
+		if score == utils.Float64FromBytes(oldScore) {
+			return false, nil
+		}
+	}
+
+	wb := rds.db.NewWriteBatch(bitcask.DefaultWriteBatchOptions)
+	// 如果此key下的这个member不存在（1.元数据不存在 2.元数据存在，但是数据部分key下的这个member不存在）
+	if !exist {
+		// 更新元数据（不存在则新增，存在则更新）
+		meta.size++
+		_ = wb.Put(key, meta.encode())
+	}
+
+	// 如果此key下的这个member存在
+	if exist {
+		// 删除旧的member
+		oldKey := &zsetInternalKey{
+			key:     key,
+			version: meta.version,
+			member:  member,
+			score:   utils.Float64FromBytes(oldScore),
+		}
+		_ = wb.Delete(oldKey.encodeWithScore())
+	}
+
+	// 将数据部分写入
+	_ = wb.Put(zk.encodeWithMember(), utils.Float64ToBytes(score))
+	_ = wb.Put(zk.encodeWithScore(), nil)
+
+	if err = wb.Commit(); err != nil {
+		return false, err
+	}
+
+	return !exist, nil
+}
+
+func (rds *RedisDataStructure) ZScore(key, member []byte) (float64, error) {
+	// 查找元数据
+	meta, err := rds.findMetadata(key, ZSet)
+	if err != nil {
+		return -1, err
+	}
+	if meta.size == 0 {
+		return -1, nil
+	}
+
+	// 构造数据部分的key
+	zk := &zsetInternalKey{
+		key:     key,
+		version: meta.version,
+		member:  member,
+	}
+
+	score, err := rds.db.Get(zk.encodeWithMember())
+	if err != nil {
+		return -1, err
+	}
+
+	return utils.Float64FromBytes(score), nil
 }
 
 // 查找元数据（根据key和type）
