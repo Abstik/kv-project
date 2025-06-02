@@ -709,3 +709,11 @@ func (db *DB) Stat() *Stat {
 		DiskSize:        dirSize,
 	}
 }
+
+// 数据库备份
+func (db *DB) Backup(dir string) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	// 复制目录到目标路径，并排除文件锁的文件
+	return utils.CopyDir(db.options.DirPath, dir, []string{fileLockName})
+}

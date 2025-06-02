@@ -5,7 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 // 获取一个目录的大小
@@ -25,18 +26,27 @@ func DirSize(dirPath string) (int64, error) {
 
 // 获取磁盘剩余可用空间大小
 func AvailableDiskSize() (uint64, error) {
-	wd, err := syscall.Getwd()
+	wd, err := os.Getwd()
 	if err != nil {
 		return 0, err
 	}
-	var stat syscall.Statfs_t
-	if err = syscall.Statfs(wd, &stat); err != nil {
+	// 获取根路径（如 C:\）
+	root := filepath.VolumeName(wd) + `\`
+
+	var freeBytesAvailable, totalNumberOfBytes, totalNumberOfFreeBytes uint64
+	err = windows.GetDiskFreeSpaceEx(
+		windows.StringToUTF16Ptr(root),
+		&freeBytesAvailable,
+		&totalNumberOfBytes,
+		&totalNumberOfFreeBytes,
+	)
+	if err != nil {
 		return 0, err
 	}
-	return stat.Bavail * uint64(stat.Bsize), nil
+	return freeBytesAvailable, nil
 }
 
-// 拷贝数据目录
+// 拷贝数据目录，递归复制目录 src 到目标目录 dest，并支持排除指定模式的文件或目录
 func CopyDir(src, dest string, exclude []string) error {
 	// 目标目标不存在则创建
 	if _, err := os.Stat(dest); os.IsNotExist(err) {
