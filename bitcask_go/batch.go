@@ -8,9 +8,10 @@ import (
 	"bitcask-go/data"
 )
 
+// 值为0的事务序列号，标识不是事务提交的记录，将key和nonTransactionSeqNo混合编码构成新的key
 const nonTransactionSeqNo uint64 = 0
 
-// 常量，标识事务已提交（批量写之后，再向数据文件中写入一条新数据，key为txnFinKey，表示此次事务已提交）
+// 常量key，标识事务已提交（批量写之后，再向数据文件中写入一条新数据，key为txnFinKey，type为data.LogRecordTxnFinished，表示此次事务已提交）
 var txnFinKey = []byte("txn-fin")
 
 // 原子批量写入数据，保证原子性
@@ -18,7 +19,7 @@ type WriteBatch struct {
 	options       WriteBatchOptions
 	mu            *sync.Mutex
 	db            *DB
-	pendingWrites map[string]*data.LogRecord // 暂存用户写入的数据，实现一次性批量写入
+	pendingWrites map[string]*data.LogRecord // 暂存用户写入的数据，实现一次性批量写入文件
 }
 
 // 初始化WriteBatch
@@ -63,10 +64,11 @@ func (wb *WriteBatch) Delete(key []byte) error {
 	wb.mu.Lock()
 	defer wb.mu.Unlock()
 
-	// 数据不存在则直接返回
+	// 内存中数据不存在，则直接返回无需删除
 	if pos := wb.db.index.Get(key); pos == nil {
+		// 如果内存中不存在
 		if wb.pendingWrites[string(key)] != nil {
-			// 如果内存中已经将数据删除，但是暂存区还有数据，则删除暂存区的此数据
+			// 如果暂存区还有数据，则删除暂存区的此数据
 			delete(wb.pendingWrites, string(key))
 		}
 		return nil
@@ -81,11 +83,8 @@ func (wb *WriteBatch) Delete(key []byte) error {
 	return nil
 }
 
-// 提交事务，将缓冲区的内容批量写入文件，并更新内存索引
+// 提交事务，将暂存区的内容批量写入文件，并更新内存索引
 func (wb *WriteBatch) Commit() error {
-	wb.mu.Lock()
-	defer wb.mu.Unlock()
-
 	if len(wb.pendingWrites) == 0 {
 		return nil
 	}
@@ -99,7 +98,7 @@ func (wb *WriteBatch) Commit() error {
 	wb.mu.Lock()
 	defer wb.mu.Unlock()
 
-	// 获取当前最新的事务序列号（此次批量写，使用这个事务序列号）
+	// 获取当前最新的事务序列号+1（此次批量写，使用这个事务序列号）
 	seqNo := atomic.AddUint64(&wb.db.seqNo, 1)
 
 	// 临时缓冲区，存放内存索引的map，用于更新内存
@@ -107,6 +106,7 @@ func (wb *WriteBatch) Commit() error {
 
 	// 遍历缓冲区，将数据写到到文件中
 	for _, record := range wb.pendingWrites {
+		// 将key和事务序列号进行编码作为新的key，将整体数据写入文件
 		logRecordPos, err := wb.db.appendLogRecord(&data.LogRecord{
 			Key:   logRecordKeyWithSeq(record.Key, seqNo),
 			Value: record.Value,
@@ -116,7 +116,7 @@ func (wb *WriteBatch) Commit() error {
 			return err
 		}
 
-		// 暂存进临时缓冲区，用于批量更新内存
+		// 暂存进临时缓冲区（此key为原始key），用于批量更新内存
 		position[string(record.Key)] = logRecordPos
 	}
 

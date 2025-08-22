@@ -20,25 +20,30 @@ import (
 )
 
 const (
-	seqNoKey     = "seq.no" // 记录最新事务序列号的文件中的key名
+	seqNoKey     = "seq.no" // 记录最新事务序列号的文件中的key名（B+树专属）
 	fileLockName = "flock"  // 文件锁名称
 )
 
 // 存储引擎实例
 type DB struct {
-	options         Options                   // 配置项
-	mu              *sync.RWMutex             // 读写锁
-	fileIds         []int                     // 文件id集合，只能在加载索引时使用，不能在其他地方更新和使用
-	activeFile      *data.DataFile            // 当前活跃的数据文件，可以用于写入
-	olderFiles      map[uint32]*data.DataFile // 旧的数据文件，可以用于读取
-	index           index.Indexer             // 内存索引
-	seqNo           uint64                    // 事务序列号，全局递增（批量操作时为全局递增，无事务时为0）
-	isMerging       bool                      // 是否正在merge（同一时刻只允许一个merge）
-	seqNoFileExists bool                      // 存储事务序列号的文件是否存在（B+树索引专属）
-	isInitial       bool                      // 是否是第一次初始化此数据目录
-	fileLock        *flock.Flock              // 文件锁保证多进程之间互斥
-	bytesWrite      uint                      // 累计写了多少个字节
-	reclaimSize     int64                     // 存储回收的数据文件大小（磁盘中无效数据的大小总量），单位：字节
+	options Options       // 配置项
+	mu      *sync.RWMutex // 读写锁
+	fileIds []int         // 文件id集合，只能在根据文件加载索引时使用，不能在其他地方更新和使用
+
+	activeFile *data.DataFile            // 当前活跃的数据文件，可以用于写入
+	olderFiles map[uint32]*data.DataFile // 旧的数据文件，可以用于读取
+	index      index.Indexer             // 内存索引
+
+	seqNo uint64 // 事务序列号，全局递增（批量操作时为全局递增，无事务时为0）
+
+	isMerging       bool // 是否正在merge（同一时刻只允许一个merge）
+	seqNoFileExists bool // 存储事务序列号的文件是否存在（B+树索引专属）
+	isInitial       bool // 是否是第一次初始化此数据目录
+
+	fileLock *flock.Flock // 文件锁保证多进程之间互斥
+
+	bytesWrite  uint  // 累计写了多少个字节（持久化时清零）
+	reclaimSize int64 // 存储回收的数据文件大小（磁盘中无效数据的大小总量），单位：字节
 }
 
 // 存储引擎统计信息
@@ -56,6 +61,7 @@ func Open(options Options) (*DB, error) {
 		return nil, err
 	}
 
+	// 是否是第一次初始化此数据目录
 	var isInitial bool
 
 	// 判读数据文件目录是否存在，如果不存在则创建
@@ -111,12 +117,12 @@ func Open(options Options) (*DB, error) {
 	// B+树索引，将索引存储在磁盘文件中，启动DB时无需从数据文件加载索引放入内存
 	// 如果不是B+树索引，再去加载索引放入内存
 	if options.IndexType != BPlusTree {
-		// 从hint索引文件中加载索引
+		// 从merge目录中的hint索引文件中加载索引
 		if err := db.loadIndexFromHintFile(); err != nil {
 			return nil, err
 		}
 
-		// 从数据文件中加载索引（同时获取到最新事务序列号，赋值给DB中的字段）
+		// 从数据目录下的数据文件中加载索引（同时获取到最新事务序列号，赋值给DB中的字段）
 		if err := db.loadIndexFromDataFiles(); err != nil {
 			return nil, err
 		}
@@ -224,9 +230,9 @@ func (db *DB) loadIndexFromDataFiles() error {
 	hasMerge, nonMergeFileId := false, uint32(0)
 
 	mergeFinFileName := db.getMergePath()
-	// 判断标识merge完成的文件是否存在
+	// 判断标识merge完成的文件是否存在，获取最小的未merge的文件id
 	if _, err := os.Stat(mergeFinFileName); err == nil {
-		// 获取未merge的文件id
+		// 如果存在
 		fid, err := db.getNonMergeFileId(db.options.DirPath)
 		if err != nil {
 			return err
@@ -241,7 +247,7 @@ func (db *DB) loadIndexFromDataFiles() error {
 		if typ == data.LogRecordDeleted {
 			// 如果文件中的记录被标记为已删除，则删除内存中相应的记录
 			// 因为日志文件是追加写入的，所以对key的删除或修改操作，以文件最新记录为准
-			// 可能文件开头可能添加了key，文件后续又删除了key，所以遍历到删除操作时要去内存中删除之前添加的key
+			// 文件开头可能添加了key，文件后续又删除了key，所以遍历到删除操作时要去内存中删除之前添加的key
 			oldPos, _ = db.index.Delete(key)
 			db.reclaimSize += int64(pos.Size)
 		} else {
@@ -249,21 +255,23 @@ func (db *DB) loadIndexFromDataFiles() error {
 			oldPos = db.index.Put(key, pos)
 		}
 		if oldPos != nil {
+			// 如果有旧记录，则将旧记录的size累加到回收大小中
 			db.reclaimSize += int64(oldPos.Size)
 		}
 	}
 
 	// 暂存事务数据（日志中可能有多条记录是属于用一个事务的，当遍历到事务结束标识才能将这些记录统一更新进内存索引）
-	// map的key为事务id，value为事务中的所有提交记录
+	// map的key为事务序列号，value为事务中的所有提交记录
 	transactionRecords := make(map[uint64][]*data.TransactionRecord)
+	// 当前遍历到的最大的事务序列号
 	var currentSeqNo = nonTransactionSeqNo
 
-	// 遍历所有的文件id，处理文件中的记录
+	// 根据文件id，依次遍历数据文件
 	for i, fid := range db.fileIds {
 		// 当前遍历到的文件id
 		var fileId = uint32(fid)
 
-		// 如果之前发生过merge并且当前遍历到的文件id小于未merge的文件id，则当前文件已经从hint中加载过索引，可以直接跳过
+		// 如果之前发生过merge并且当前遍历到的文件id小于未merge的文件id，说明当前文件已经从hint中加载过索引，则可以直接跳过
 		if hasMerge && fileId < nonMergeFileId {
 			continue
 		}
@@ -271,14 +279,14 @@ func (db *DB) loadIndexFromDataFiles() error {
 		// 当前遍历到的文件
 		var dataFile *data.DataFile
 
-		// 根据 当前遍历到的文件id 指定 当前遍历到的文件
+		// 根据 当前遍历到的文件id 找到 当前遍历到的文件
 		if fileId == db.activeFile.FileId {
 			dataFile = db.activeFile
 		} else {
 			dataFile = db.olderFiles[fileId]
 		}
 
-		// 读取文件中的记录
+		// 循环读取文件中的每条记录
 		var offset int64 = 0
 		for {
 			// 根据偏移量读取当前文件的一条日志记录
@@ -299,9 +307,9 @@ func (db *DB) loadIndexFromDataFiles() error {
 			if seqNo == nonTransactionSeqNo { // 如果不是事务提交的记录，则直接更新内存
 				updateIndex(realKey, logRecord.Type, logRecordPos)
 			} else { // 如果是事务提交的记录
-				// 遍历到文件中标识事务完成的记录，则可以更新到内存索引中
+				// 遍历到文件中标识事务完成的记录，则可以批量更新到内存索引中
 				if logRecord.Type == data.LogRecordTxnFinished {
-					// 遍历事务暂存集合的所有记录，逐个更新到内存中
+					// 将事务暂存集合的所有记录，逐个更新到内存中
 					for _, txnRecord := range transactionRecords[seqNo] {
 						updateIndex(txnRecord.Record.Key, txnRecord.Record.Type, logRecordPos)
 					}
@@ -359,8 +367,7 @@ func (db *DB) Close() error {
 		return err
 	}
 
-	// B+树索引启动时不会从数据文件加载索引，所以也拿不到最新的事务序列号
-	// 因此要将当前最新事务序列号写入专门文件
+	// B+树索引启动时不会从数据文件加载索引，所以也拿不到最新的事务序列号，因此要将当前最新事务序列号写入专门文件
 	seqNoFile, err := data.OpenSeqNoFile(db.options.DirPath)
 	if err != nil {
 		return err
@@ -505,8 +512,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 // 打开新的活跃文件（访问此方法前必须持有互斥锁 ）
 func (db *DB) setActiveFile() error {
 	var initialField uint32 = 0
-	if db.activeFile == nil {
-		// 如果当前活跃文件为空则初始化数据文件
+	if db.activeFile != nil {
 		initialField = db.activeFile.FileId + 1
 	}
 
@@ -642,7 +648,7 @@ func (db *DB) Delete(key []byte) error {
 	return nil
 }
 
-// 从指定文件中加载最新事务序列号（B+树索引专属）
+// 从指定文件中加载最新事务序列号（B+树索引专属），获取成功后立即删除文件
 func (db *DB) loadSeqNo() error {
 	fileName := filepath.Join(db.options.DirPath, data.SeqNoFileName)
 	if _, err := os.Stat(fileName); os.IsNotExist(err) {

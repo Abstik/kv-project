@@ -4,26 +4,13 @@ import "os"
 
 // 配置项结构体（封装需要用户自定义的参数）
 type Options struct {
-	// 数据库数据文件目录
-	DirPath string
-
-	// 数据文件的大小（阈值）
-	DataFileSize int64
-
-	// 每次写数据是否持久化
-	SyncWrites bool
-
-	// 自动持久化的阈值
-	BytesPerSync uint
-
-	// 索引类型
-	IndexType IndexType
-
-	// 启动时是否使用 MMap 加载数据
-	MMapAtStartup bool
-
-	// 数据文件merge合并的阈值（无效数据/总数据），超过此阈值才会merge
-	DataFileMergeRatio float32
+	DirPath            string    // 数据库数据文件目录名
+	DataFileSize       int64     // 数据文件的大小（阈值）
+	SyncWrites         bool      // 每次写数据是否持久化
+	BytesPerSync       uint      // 自动持久化的阈值（写入数据大于此阈值则持久化）
+	IndexType          IndexType // 索引类型
+	MMapAtStartup      bool      // 启动时是否使用 MMap 加载数据
+	DataFileMergeRatio float32   // 数据文件merge合并的阈值（无效数据/总数据），超过此阈值才会merge
 }
 
 // 索引迭代器配置项（供用户调用）

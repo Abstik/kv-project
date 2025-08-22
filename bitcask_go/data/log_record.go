@@ -5,10 +5,11 @@ import (
 	"hash/crc32"
 )
 
+// LogRecord中的type类型，不显式指定则默认为零值0
 type LogRecordType = byte
 
 const (
-	LogRecordNormal      LogRecordType = iota // 未被删除
+	LogRecordNormal      LogRecordType = iota // 未被删除（正常数据）
 	LogRecordDeleted                          // 已被删除
 	LogRecordTxnFinished                      // 已被提交（批量写之后，再向数据文件中写入一条新数据，Type为LogRecordTxnFinished，表示此次事务已提交）
 )
@@ -16,15 +17,15 @@ const (
 // LogRecord的Header部分：crc(校验值) type(类型) keySize(key大小) valueSize(value大小)
 // crc 4字节
 // type 1字节
-// keySize和valueSize是变长的，最大为5字节
+// keySize和valueSize是变长的，每个最大为5字节
 const maxLogRecordHeaderSize = binary.MaxVarintLen32*2 + 5 // Header的最大大小
 
 // LogRecord的头部信息
 type logRecordHeader struct {
-	crc        uint32        // 校验值
-	recordType LogRecordType // 标识LogRecord的类型
-	keySize    uint32        // key的长度
-	valueSize  uint32        // value的长度
+	crc        uint32        // 校验值 4字节
+	recordType LogRecordType // 标识LogRecord的类型 1字节
+	keySize    uint32        // key的长度 最大为5字节
+	valueSize  uint32        // value的长度 最大为5字节
 }
 
 // 文件中的记录（因为数据文件的数据是追加写入，类似日志格式，所以叫日志）
@@ -51,7 +52,7 @@ type TransactionRecord struct {
 // LogRecord的Header部分：crc(校验值) type(类型) keySize(key大小) valueSize(value大小)
 // crc 4字节
 // type 1字节
-// keySize和valueSize是变长的，最大为5
+// keySize和valueSize是变长的，每个最大为5
 func EncodeLogRecord(logRecord *LogRecord) ([]byte, int64) {
 	// 初始化header的字节数组
 	header := make([]byte, maxLogRecordHeaderSize)

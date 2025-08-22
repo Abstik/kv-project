@@ -23,7 +23,6 @@ func NewFileIOManager(fileName string) (*FileIO, error) {
 }
 
 // 实现接口中的文件操作函数，直接调用go语言提供的文件库函数
-
 func (fio *FileIO) Read(b []byte, offset int64) (int, error) {
 	return fio.fd.ReadAt(b, offset)
 }

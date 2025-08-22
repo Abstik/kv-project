@@ -17,7 +17,7 @@ const (
 	mergeFinishedKey = "merge.finished"
 )
 
-// Merge 清理无效数据，生成 Hint 文件
+// 清理无效数据，生成Hint文件
 func (db *DB) Merge() error {
 	// 如果数据库为空，则直接返回
 	if db.activeFile == nil {
@@ -72,22 +72,23 @@ func (db *DB) Merge() error {
 		return nil
 	}
 
-	// 记录最近没有参与 merge 的文件 id
+	// 记录没有参与 merge 的文件 id
 	nonMergeFileId := db.activeFile.FileId
 
-	// 取出所有需要 merge 的文件
+	// 取出所有需要 merge 的文件（旧DB中的olderFiles所有文件）
 	var mergeFiles []*data.DataFile
 	for _, file := range db.olderFiles {
 		mergeFiles = append(mergeFiles, file)
 	}
+
 	db.mu.Unlock()
 
-	// 将merge的文件从小到大进行排序，依次merge
+	// 将merge的文件根据FileId从小到大进行排序，依次merge
 	sort.Slice(mergeFiles, func(i, j int) bool {
 		return mergeFiles[i].FileId < mergeFiles[j].FileId
 	})
 
-	// 获取到merge引擎的目录
+	// 拼接出merge引擎的目录名
 	mergePath := db.getMergePath()
 	// 如果目录存在，说明发生过merge，将其删除掉
 	if _, err := os.Stat(mergePath); err == nil {
@@ -95,12 +96,12 @@ func (db *DB) Merge() error {
 			return err
 		}
 	}
-	// 新建一个 merge path 的目录
+	// 新建一个merge目录
 	if err := os.MkdirAll(mergePath, os.ModePerm); err != nil {
 		return err
 	}
 
-	// 在merge目录中，打开一个新的临时 bitcask 实例
+	// 在merge目录中，打开一个新的临时bitcask实例
 	mergeOptions := db.options
 	mergeOptions.DirPath = mergePath
 	mergeOptions.SyncWrites = false
@@ -109,7 +110,7 @@ func (db *DB) Merge() error {
 		return err
 	}
 
-	// 打开hint文件存储索引
+	// 打开hint文件，存储索引
 	hintFile, err := data.OpenHintFile(mergePath)
 	if err != nil {
 		return err
@@ -118,6 +119,7 @@ func (db *DB) Merge() error {
 	// 遍历处理每个数据文件
 	for _, dataFile := range mergeFiles {
 		var offset int64 = 0
+		// 依次读取每个文件中的每条记录
 		for {
 			logRecord, size, err := dataFile.ReadLogRecord(offset)
 			if err != nil {
@@ -186,6 +188,7 @@ func (db *DB) Merge() error {
 	return nil
 }
 
+// 获取merge目录名
 // 原目录：tmp/bitcask
 // 对应的merge目录：tmp/bitcask-merge
 func (db *DB) getMergePath() string {
@@ -202,7 +205,6 @@ func (db *DB) getMergePath() string {
 // 加载merge数据目录
 func (db *DB) loadMergeFiles() error {
 	mergePath := db.getMergePath()
-
 	// 如果目录不存在则直接返回
 	if _, err := os.Stat(mergePath); os.IsNotExist(err) {
 		return nil
@@ -218,9 +220,10 @@ func (db *DB) loadMergeFiles() error {
 
 	// 查找标识merge完成的文件
 	var mergeFinished bool      // 标识merge是否完成过
-	var mergeFileNames []string // merge过的文件的集合
+	var mergeFileNames []string // merge目录中的文件名集合
 	// 遍历merge目录下的所有文件
 	for _, entry := range dirEntries {
+		// 如果是标识merge完成的文件
 		if entry.Name() == data.MergeFinishedFileName {
 			// 如果merge完成过
 			mergeFinished = true
@@ -233,10 +236,12 @@ func (db *DB) loadMergeFiles() error {
 		if entry.Name() == fileLockName {
 			continue
 		}
+
+		// 将merge目录中的文件名存入mergeFileNames集合中，用于后续移动到新的DB目录中
 		mergeFileNames = append(mergeFileNames, entry.Name())
 	}
 
-	// 如果merge未完成
+	// 如果merge还未完成
 	if !mergeFinished {
 		return nil
 	}
@@ -247,7 +252,7 @@ func (db *DB) loadMergeFiles() error {
 		return nil
 	}
 
-	// 删除旧的DB中的数据文件
+	// 在旧的DB中，根据最小的未参与merge的文件id，在DB目录下将所有参与过merge的文件删除
 	var fileId uint32 = 0
 	for ; fileId < nonMergeFileId; fileId++ {
 		fileName := data.GetDataFileName(db.options.DirPath, fileId)
@@ -258,7 +263,7 @@ func (db *DB) loadMergeFiles() error {
 		}
 	}
 
-	// 将新的数据文件（merge目录下的文件）移动到数据目录（DB引擎的目录）中
+	// 将merge目录下的文件移动到DB引擎的目录中
 	for _, fileName := range mergeFileNames {
 		oldPath := filepath.Join(mergePath, fileName)
 		newPath := filepath.Join(db.options.DirPath, fileName)
@@ -295,13 +300,13 @@ func (db *DB) getNonMergeFileId(dirPath string) (uint32, error) {
 
 // 从 hint 文件中加载索引
 func (db *DB) loadIndexFromHintFile() error {
-	// 查看 hint 索引文件是否存在
+	// 查看hint索引文件是否存在
 	hintFileName := filepath.Join(db.options.DirPath, data.HintFileName)
 	if _, err := os.Stat(hintFileName); os.IsNotExist(err) {
 		return nil
 	}
 
-	//	打开 hint 索引文件
+	//打开hint索引文件
 	hintFile, err := data.OpenHintFile(db.options.DirPath)
 	if err != nil {
 		return err
