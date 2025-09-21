@@ -49,7 +49,7 @@ func (rds *RedisDataStructure) Set(key []byte, ttl time.Duration, value []byte) 
 		return nil
 	}
 
-	// 编码key：type(数据类型) + expire(过期时间) + payload(原始value)
+	// 新的value：type(数据类型) + expire(过期时间) + payload(原始value)
 	buf := make([]byte, binary.MaxVarintLen64+1)
 
 	// 设置数据类型为String

@@ -114,7 +114,7 @@ func (sk *setInternalKey) encode() []byte {
 	buf := make([]byte, len(sk.key)+len(sk.member)+8+4)
 	var index = 0
 
-	// 编码key
+	// 复制key
 	copy(buf[index:index+len(sk.key)], sk.key)
 	index += len(sk.key)
 
@@ -122,7 +122,7 @@ func (sk *setInternalKey) encode() []byte {
 	binary.LittleEndian.PutUint64(buf[index:index+8], uint64(sk.version))
 	index += 8
 
-	// 编码member
+	// 复制member
 	copy(buf[index:index+len(sk.member)], sk.member)
 	index += len(sk.member)
 
@@ -142,7 +142,7 @@ type listInternalKey struct {
 func (lk *listInternalKey) encode() []byte {
 	buf := make([]byte, len(lk.key)+8+8)
 
-	// 拷贝key
+	// 复制key
 	var index = 0
 	copy(buf[index:len(lk.key)], lk.key)
 	index += len(lk.key)
@@ -169,7 +169,7 @@ type zsetInternalKey struct {
 func (zk *zsetInternalKey) encodeWithMember() []byte {
 	buf := make([]byte, len(zk.key)+len(zk.member)+8)
 
-	// 拷贝key
+	// 复制key
 	var index = 0
 	copy(buf[index:index+len(zk.key)], zk.key)
 	index += len(zk.key)
@@ -189,7 +189,7 @@ func (zk *zsetInternalKey) encodeWithScore() []byte {
 	scoreBuf := utils.Float64ToBytes(zk.score)
 	buf := make([]byte, len(zk.key)+len(zk.member)+len(scoreBuf)+8+4)
 
-	// 拷贝key
+	// 复制key
 	var index = 0
 	copy(buf[index:index+len(zk.key)], zk.key)
 	index += len(zk.key)
@@ -198,11 +198,11 @@ func (zk *zsetInternalKey) encodeWithScore() []byte {
 	binary.LittleEndian.PutUint64(buf[index:index+8], uint64(zk.version))
 	index += 8
 
-	// 拷贝score
+	// 复制score
 	copy(buf[index:index+len(scoreBuf)], scoreBuf)
 	index += len(scoreBuf)
 
-	// 拷贝member
+	// 复制member
 	copy(buf[index:index+len(zk.member)], zk.member)
 	index += len(zk.member)
 
