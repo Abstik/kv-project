@@ -49,7 +49,7 @@ func (rds *RedisDataStructure) Set(key []byte, ttl time.Duration, value []byte) 
 		return nil
 	}
 
-	// 编码value：type(数据类型) + expire(过期时间) + payload(原始value)
+	// 编码key：type(数据类型) + expire(过期时间) + payload(原始value)
 	buf := make([]byte, binary.MaxVarintLen64+1)
 
 	// 设置数据类型为String
@@ -435,7 +435,7 @@ func (rds *RedisDataStructure) ZAdd(key []byte, score float64, member []byte) (b
 		score:   score,
 	}
 
-	// 此key下的这个member是否存在
+	// 此key下的这个member key是否存在
 	var exist = true
 
 	// 先根据member key寻找score
@@ -447,7 +447,7 @@ func (rds *RedisDataStructure) ZAdd(key []byte, score float64, member []byte) (b
 		exist = false
 	}
 
-	// 如果此key下的这个member存在
+	// 如果member key存在
 	if exist {
 		// 如果score相同，表示相同key下的member和score都相同，数据重复，返回false
 		if score == utils.Float64FromBytes(oldScore) {
@@ -456,16 +456,17 @@ func (rds *RedisDataStructure) ZAdd(key []byte, score float64, member []byte) (b
 	}
 
 	wb := rds.db.NewWriteBatch(bitcask.DefaultWriteBatchOptions)
-	// 如果此key下的这个member不存在（1.元数据不存在 2.元数据存在，但是数据部分key下的这个member不存在）
+
+	// 如果member key不存在（1.此key的元数据不存在，2.元数据存在，但是此member不存在）
 	if !exist {
 		// 更新元数据（不存在则新增，存在则更新）
 		meta.size++
 		_ = wb.Put(key, meta.encode())
 	}
 
-	// 如果此key下的这个member存在
+	// 如果member key存在
 	if exist {
-		// 删除旧的member
+		// 删除旧的score key
 		oldKey := &zsetInternalKey{
 			key:     key,
 			version: meta.version,
@@ -475,7 +476,7 @@ func (rds *RedisDataStructure) ZAdd(key []byte, score float64, member []byte) (b
 		_ = wb.Delete(oldKey.encodeWithScore())
 	}
 
-	// 将数据部分写入
+	// 更新或插入member key 和 score key
 	_ = wb.Put(zk.encodeWithMember(), utils.Float64ToBytes(score))
 	_ = wb.Put(zk.encodeWithScore(), nil)
 
@@ -503,6 +504,7 @@ func (rds *RedisDataStructure) ZScore(key, member []byte) (float64, error) {
 		member:  member,
 	}
 
+	// 根据member key查找score
 	score, err := rds.db.Get(zk.encodeWithMember())
 	if err != nil {
 		return -1, err

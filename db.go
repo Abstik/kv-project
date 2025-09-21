@@ -1,7 +1,6 @@
 package bitcask_go
 
 import (
-	"container/heap"
 	"errors"
 	"fmt"
 	"io"
@@ -43,7 +42,7 @@ type DB struct {
 
 	fileLock *flock.Flock // 文件锁保证多进程之间互斥
 
-	bytesWrite  uint  // 累计写了多少个字节（持久化时清零）
+	bytesWrite  uint  // 累计未持久化的数据量，字节（持久化时清零）
 	reclaimSize int64 // 存储回收的数据文件大小（磁盘中无效数据的大小总量），单位：字节
 }
 
@@ -480,8 +479,9 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 	}
 	db.bytesWrite += uint(size)
 
-	// 自动持久化
+	// 持久化活跃文件
 	var needSync = db.options.SyncWrites
+	// 如果累计未持久化的数据量大于用户指定的阈值，则进行持久化
 	if !needSync && db.options.BytesPerSync > 0 && db.bytesWrite >= db.options.BytesPerSync {
 		needSync = true
 	}
@@ -489,16 +489,9 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 		if err := db.activeFile.Sync(); err != nil {
 			return nil, err
 		}
-		// 清空累计值
+		// 清空未持久化数据量
 		if db.bytesWrite > 0 {
 			db.bytesWrite = 0
-		}
-	}
-
-	// 根据用户配置决定是否持久化
-	if db.options.SyncWrites {
-		if err := db.activeFile.Sync(); err != nil {
-			return nil, err
 		}
 	}
 
@@ -510,7 +503,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 	}, nil
 }
 
-// 打开新的活跃文件（访问此方法前必须持有互斥锁 ）
+// 打开新的活跃文件（访问此方法前必须持有锁 ）
 func (db *DB) setActiveFile() error {
 	var initialField uint32 = 0
 	if db.activeFile != nil {
@@ -723,59 +716,4 @@ func (db *DB) Backup(dir string) error {
 	defer db.mu.RUnlock()
 	// 复制目录到目标路径，并排除文件锁的文件
 	return utils.CopyDir(db.options.DirPath, dir, []string{fileLockName})
-}
-
-type ListNode struct {
-	Val  int
-	Next *ListNode
-}
-
-// 定义堆中元素结构
-type NodeHeap []*ListNode
-
-// heap.Interface 接口实现
-func (h NodeHeap) Len() int           { return len(h) }
-func (h NodeHeap) Less(i, j int) bool { return h[i].Val < h[j].Val } // 小顶堆
-func (h NodeHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-
-func (h *NodeHeap) Push(x any) {
-	*h = append(*h, x.(*ListNode))
-}
-
-func (h *NodeHeap) Pop() any {
-	old := *h
-	n := len(old)
-	node := old[n-1]
-	*h = old[:n-1]
-	return node
-}
-
-// 合并 K 个升序链表
-func mergeKLists(lists []*ListNode) *ListNode {
-	h := &NodeHeap{}
-	heap.Init(h)
-
-	// 将每个链表的头节点加入堆
-	for _, node := range lists {
-		if node != nil {
-			heap.Push(h, node)
-		}
-	}
-
-	dummy := &ListNode{}
-	tail := dummy
-
-	for h.Len() > 0 {
-		// 取堆顶最小节点
-		minNode := heap.Pop(h).(*ListNode)
-		tail.Next = minNode
-		tail = tail.Next
-
-		// 如果该节点有下一个节点，入堆
-		if minNode.Next != nil {
-			heap.Push(h, minNode.Next)
-		}
-	}
-
-	return dummy.Next
 }

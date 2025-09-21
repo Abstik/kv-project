@@ -46,7 +46,7 @@ func (md *metadata) encode() []byte {
 	return buf[:index]
 }
 
-// 从字节数组中解码出metadata
+// 从字节数组中解码出metadata元数据
 func decodeMetadata(buf []byte) *metadata {
 	dataType := buf[0]
 
@@ -87,7 +87,7 @@ func (hk *hashInternalKey) encode() []byte {
 	buf := make([]byte, len(hk.key)+len(hk.filed)+8)
 	var index = 0
 
-	// 编码key
+	// 拷贝key
 	copy(buf[index:index+len(hk.key)], hk.key)
 	index += len(hk.key)
 
@@ -95,7 +95,7 @@ func (hk *hashInternalKey) encode() []byte {
 	binary.LittleEndian.PutUint64(buf[index:index+8], uint64(hk.version))
 	index += 8
 
-	// 编码field
+	// 拷贝field
 	copy(buf[index:], hk.filed)
 
 	return buf
@@ -132,6 +132,7 @@ func (sk *setInternalKey) encode() []byte {
 	return buf
 }
 
+// list类型数据部分的key
 type listInternalKey struct {
 	key     []byte
 	version int64
@@ -141,7 +142,7 @@ type listInternalKey struct {
 func (lk *listInternalKey) encode() []byte {
 	buf := make([]byte, len(lk.key)+8+8)
 
-	// 编码key
+	// 拷贝key
 	var index = 0
 	copy(buf[index:len(lk.key)], lk.key)
 	index += len(lk.key)
@@ -156,6 +157,7 @@ func (lk *listInternalKey) encode() []byte {
 	return buf
 }
 
+// zset类型数据部分的key
 type zsetInternalKey struct {
 	key     []byte
 	version int64
@@ -163,10 +165,11 @@ type zsetInternalKey struct {
 	score   float64
 }
 
+// 构造member key
 func (zk *zsetInternalKey) encodeWithMember() []byte {
 	buf := make([]byte, len(zk.key)+len(zk.member)+8)
 
-	// 编码key
+	// 拷贝key
 	var index = 0
 	copy(buf[index:index+len(zk.key)], zk.key)
 	index += len(zk.key)
@@ -181,11 +184,12 @@ func (zk *zsetInternalKey) encodeWithMember() []byte {
 	return buf
 }
 
+// 构造score key
 func (zk *zsetInternalKey) encodeWithScore() []byte {
 	scoreBuf := utils.Float64ToBytes(zk.score)
 	buf := make([]byte, len(zk.key)+len(zk.member)+len(scoreBuf)+8+4)
 
-	// 编码key
+	// 拷贝key
 	var index = 0
 	copy(buf[index:index+len(zk.key)], zk.key)
 	index += len(zk.key)
@@ -194,11 +198,11 @@ func (zk *zsetInternalKey) encodeWithScore() []byte {
 	binary.LittleEndian.PutUint64(buf[index:index+8], uint64(zk.version))
 	index += 8
 
-	// 编码score
+	// 拷贝score
 	copy(buf[index:index+len(scoreBuf)], scoreBuf)
 	index += len(scoreBuf)
 
-	// 编码member
+	// 拷贝member
 	copy(buf[index:index+len(zk.member)], zk.member)
 	index += len(zk.member)
 

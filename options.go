@@ -44,7 +44,6 @@ const (
 )
 
 // 默认配置
-
 var DefaultOptions = Options{
 	DirPath:            os.TempDir(),
 	DataFileSize:       256 * 1024 * 1024, // 256MB
